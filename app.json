@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "iritsi",
+    "slug": "iritsi",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icons/256x256.png",
+    "scheme": "iritsi",
+    "userInterfaceStyle": "automatic",
+    "web": {
+      "output": "static",
+      "favicon": "./assets/icons/128x128.png"
+    },
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
