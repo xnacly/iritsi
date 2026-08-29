@@ -4,7 +4,7 @@
   <img width="256" height="256" src="https://raw.githubusercontent.com/xnacly/iritsi/refs/heads/master/assets/icons/128x128.png"/>
 </p>
  
-A rust offline first bilbao public transportation android application.
+An offline first bilbao public transportation android application.
 
 ## Features:
 
@@ -14,8 +14,6 @@ A rust offline first bilbao public transportation android application.
 
 ## Local setup
 
-### Dependencies
-
 > Install android studio first, with:
 > 1. sdk
 > 2. sdk cli tools
@@ -24,13 +22,24 @@ A rust offline first bilbao public transportation android application.
 >
 > See [Dioxus Mobile App>Android](https://dioxuslabs.com/learn/0.7/guides/platforms/mobile#android)
 
-Then add rust targets:
+
+### Nix:
+
+```shell
+nix develop
+```
+
+### Manually
+
+#### Dependencies
+
+Add rust targets:
 
 ```shell
 rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
 ```
 
-### Path setup
+#### Path setup
 
 Then define:
 
@@ -55,7 +64,7 @@ to your path:
 export PATH="$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin"
 ```
 
-### Android emulator configuration
+#### Android emulator configuration
 
 By default there is no sdk installed, so we need to first install the SDK, I
 went with 37.0 here, which is Android 17:
