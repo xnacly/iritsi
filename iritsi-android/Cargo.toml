@@ -1,0 +1,15 @@
+[package]
+name = "iritsi-android"
+version = "0.1.0"
+authors = ["xnacly <47723417+xNaCly@users.noreply.github.com>"]
+edition = "2021"
+
+[dependencies]
+dioxus = { version = "0.7.1", features = ["router"] }
+iritsi-core = { path = "../iritsi-core" }
+
+[features]
+default = ["mobile"]
+web = ["dioxus/web"]
+desktop = ["dioxus/desktop"]
+mobile = ["dioxus/mobile"]
