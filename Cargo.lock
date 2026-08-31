@@ -2615,6 +2615,10 @@ name = "iritsi-core"
 version = "0.1.0"
 
 [[package]]
+name = "iritsi-gtfs"
+version = "0.1.0"
+
+[[package]]
 name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -5,6 +5,6 @@ edition = "2024"
 
 [workspace]
 resolver = "3"
-members = ["iritsi-core", "iritsi-android"]
+members = ["iritsi-core", "iritsi-android", "iritsi-gtfs"]
 
 [dependencies]
