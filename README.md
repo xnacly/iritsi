@@ -1,7 +1,7 @@
 # Iritsi
 
 <p align="center">
-  <img width="256" height="256" src="https://raw.githubusercontent.com/xnacly/iritsi/refs/heads/master/assets/icons/128x128.png"/>
+  <img width="256" height="256" src="https://raw.githubusercontent.com/xnacly/iritsi/refs/heads/master/iritsi-android/assets/icons/128x128.png"/>
 </p>
  
 An offline first bilbao public transportation android application.
