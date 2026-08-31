@@ -8,9 +8,17 @@ An offline first bilbao public transportation android application.
 
 ## Features:
 
-- Search and Favorite stations
-- Trach travels on both the metro bilbao map and a live notification
-- etc.
+- Search for and mark stations as favorites
+- View departures and arrivals for each station
+- Plan, track and favorite travels
+- Live notifications with
+  - previous, current and next station
+  - estimated arrival
+  - direction
+  - starting time
+  - progress bra
+- Handmade pixel art for all icons, logo and art
+
 
 ## Local setup
 
