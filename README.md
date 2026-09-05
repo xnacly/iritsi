@@ -25,3 +25,9 @@ An offline first bilbao public transportation android application.
 See [(Dioxus) Android Dev Setup for Arch
 Linux](https://xnacly.me/posts/2026/dioxus-android-setup-arch-linux/) or use
 nix develop with the provided flake.
+
+## Project layout
+
+- iritsi-core is the non ui logic for managing the underlying gtfs data storage, the route planning and other application logic
+- iritsi-gtfs handles mobile optimised gtfs container decoding, parsing and zero allocation data preparation for consumption by core
+- iritsi-android is the dioxus android application consuming the core api and rendering to the user

@@ -1,6 +1,2 @@
+*.zip
 target
-
-
-# Added by cargo
-
-/target
