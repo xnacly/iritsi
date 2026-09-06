@@ -3,10 +3,12 @@ use std::io::Cursor;
 use csv::ByteRecord;
 use zip::ZipArchive;
 
-use crate::{err::GtfsErr, stops::Stops};
+use crate::{err::GtfsErr, stop_times::StopTimes, stops::Stops};
 
 mod err;
-/// stop.txt specific csv row decoding
+mod num;
+
+mod stop_times;
 mod stops;
 
 pub struct GtfsSchedule<'g> {
@@ -86,6 +88,13 @@ impl<'g> GtfsSchedule<'g> {
             reader: self.reader_from_file(self.stops_idx)?,
             reused_record: ByteRecord::with_capacity(64, 8),
         })
+    }
+
+    pub fn stop_times(&mut self) -> Result<StopTimes, GtfsErr> {
+        let mut file = self.archive.by_index(self.stop_times_idx)?;
+        let mut data = Vec::with_capacity(file.size() as usize);
+        let _ = std::io::Read::read_to_end(&mut file, &mut data)?;
+        Ok(data.into())
     }
 }
 
