@@ -48,7 +48,15 @@ pub struct StopTimes {
 
 impl From<Vec<u8>> for StopTimes {
     fn from(value: Vec<u8>) -> Self {
-        Self { src: value, pos: 0 }
+        let pos = if value.starts_with(b"trip_id,") {
+            value
+                .iter()
+                .position(|&b| b == b'\n')
+                .map_or(value.len(), |header_end| header_end + 1)
+        } else {
+            0
+        };
+        Self { src: value, pos }
     }
 }
 
@@ -187,6 +195,15 @@ mod tests {
         let mut stop_times = StopTimes::from(Vec::new());
 
         assert!(stop_times.next().is_none());
+    }
+
+    #[test]
+    fn skips_the_header_row() {
+        let input = b"trip_id,stop_sequence,arrival_time,departure_time,stop_id,pickup_type\n870583,3,09:53:02,09:53:20,40.0,0\n";
+
+        let actual = StopTimes::from(input.to_vec()).next().unwrap().unwrap();
+
+        assert_eq!(actual.trip_id, 870583);
     }
 
     #[test]
