@@ -13,7 +13,6 @@ mod stops;
 
 pub struct GtfsSchedule<'g> {
     archive: ZipArchive<Cursor<&'g [u8]>>,
-    agency_idx: usize,
     calendar_idx: usize,
     calendar_dates_idx: usize,
     routes_idx: usize,
@@ -30,7 +29,6 @@ impl<'g> GtfsSchedule<'g> {
     pub fn new(src: &'g [u8]) -> Result<Self, err::GtfsErr> {
         let mut archive = zip::ZipArchive::new(Cursor::new(src))?;
 
-        let mut agency = None;
         let mut calendar = None;
         let mut calendar_dates = None;
         let mut routes = None;
@@ -45,7 +43,6 @@ impl<'g> GtfsSchedule<'g> {
             let file = archive.by_index(idx)?;
 
             match file.name() {
-                "agency.txt" => agency = Some(idx),
                 "calendar.txt" => calendar = Some(idx),
                 "calendar_dates.txt" => calendar_dates = Some(idx),
                 "routes.txt" => routes = Some(idx),
@@ -61,7 +58,6 @@ impl<'g> GtfsSchedule<'g> {
 
         Ok(Self {
             archive,
-            agency_idx: agency.ok_or(err::GtfsErr::MissingFile("agency.txt"))?,
             calendar_idx: calendar.ok_or(err::GtfsErr::MissingFile("calendar.txt"))?,
             calendar_dates_idx: calendar_dates
                 .ok_or(err::GtfsErr::MissingFile("calendar_dates.txt"))?,
