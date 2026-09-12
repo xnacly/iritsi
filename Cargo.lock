@@ -2762,6 +2762,9 @@ dependencies = [
 [[package]]
 name = "iritsi-core"
 version = "0.1.0"
+dependencies = [
+ "iritsi-gtfs",
+]
 
 [[package]]
 name = "iritsi-gtfs"

@@ -3,6 +3,6 @@ use dioxus::prelude::*;
 #[component]
 pub fn Home() -> Element {
     rsx! {
-        p { "hello world" }
+        p { "hello world hund" }
     }
 }

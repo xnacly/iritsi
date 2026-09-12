@@ -24,6 +24,8 @@ impl TryFrom<&[u8]> for StopTime {
         let stop_seq = num::unchecked_parse_u32(fields.next().unwrap()) as u8;
         let arrival_time = num::unchecked_parse_time(fields.next().unwrap());
         let departure_time = num::unchecked_parse_time(fields.next().unwrap());
+
+        // PERF: technically this is not a floating point but rather <stop_id>.0; i dont know why
         let stop_id = unsafe { str::from_utf8_unchecked(fields.next().unwrap()) }
             .parse::<f32>()
             .map_err(|_| GtfsErr::GtfsFormatErr("Failed to parse stop_times.stop_id as float"))?;
