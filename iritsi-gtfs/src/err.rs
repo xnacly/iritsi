@@ -24,3 +24,16 @@ impl From<csv::Error> for GtfsErr {
         Self::GtfsFormatErr("csv parsing failure")
     }
 }
+
+impl std::fmt::Display for GtfsErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GtfsErr::ZipErr(err) => write!(f, "zip: {err}"),
+            GtfsErr::MissingFile(file) => write!(f, "missing {file}"),
+            GtfsErr::IO(err) => write!(f, "io: {err}"),
+            GtfsErr::GtfsFormatErr(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl std::error::Error for GtfsErr {}
