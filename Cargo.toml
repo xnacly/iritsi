@@ -8,3 +8,27 @@ resolver = "3"
 members = ["iritsi-core", "iritsi-android", "iritsi-gtfs"]
 
 [dependencies]
+
+[profile.dev.package.iritsi-core]
+opt-level = 3
+
+[profile.dev.package.iritsi-gtfs]
+opt-level = 3
+
+[profile.dev.package.libsqlite3-sys]
+opt-level = 3
+
+[profile.dev.package.zip]
+opt-level = 3
+
+[profile.dev.package.csv]
+opt-level = 3
+
+[profile.dev.package.csv-core]
+opt-level = 3
+
+[profile.dev.package.flate2]
+opt-level = 3
+
+[profile.dev.package.zlib-rs]
+opt-level = 3
