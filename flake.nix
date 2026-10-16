@@ -29,13 +29,16 @@
         default = pkgs.mkShell {
           packages = with pkgs; [
             rust
+            dioxus-cli
             android-tools
+            jdk21
           ];
 
           shellHook = ''
+            export JAVA_HOME="${pkgs.jdk21}"
             export ANDROID_HOME="$HOME/Android/Sdk"
             export ANDROID_SDK_ROOT="$ANDROID_HOME"
-            export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/30.0.16138531"
+            export ANDROID_NDK_HOME="$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -n 1)"
             export PATH="$PATH:$ANDROID_HOME/emulator"
             export PATH="$PATH:$ANDROID_HOME/platform-tools"
             export PATH="$PATH:$ANDROID_HOME/cmdline-tools/latest/bin"
