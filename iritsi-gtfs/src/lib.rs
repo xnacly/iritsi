@@ -25,7 +25,7 @@ pub use err::GtfsErr;
 pub use routes::Route;
 pub use shapes::ShapePoint;
 pub use stop_times::StopTime;
-pub use stops::Stop;
+pub use stops::{LocationType, Stop, StopId};
 pub use trips::Trip;
 
 pub struct GtfsSchedule<'g> {

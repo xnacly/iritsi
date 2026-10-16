@@ -1,18 +1,77 @@
-use std::str::FromStr;
+use std::{fmt, str::FromStr};
 
 use csv::ByteRecord;
 
 use crate::err::GtfsErr;
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct StopId {
+    pub station: u16,
+    pub child: Option<u8>,
+}
+
+impl StopId {
+    #[inline]
+    pub(crate) fn parse(bytes: &[u8]) -> Result<Self, GtfsErr> {
+        const INVALID: GtfsErr = GtfsErr::GtfsFormatErr("Invalid stop id");
+        let digits = |b: &[u8]| {
+            if b.is_empty() || b.len() > 5 || !b.iter().all(u8::is_ascii_digit) {
+                return Err(INVALID);
+            }
+            Ok(crate::num::unchecked_parse_u32(b))
+        };
+        let bytes = bytes.trim_ascii();
+        let (station, child) = match bytes.iter().position(|&b| b == b'.') {
+            Some(dot) => (&bytes[..dot], Some(&bytes[dot + 1..])),
+            None => (bytes, None),
+        };
+        let child = match child {
+            Some(child) => Some(u8::try_from(digits(child)?).map_err(|_| INVALID)?),
+            None => None,
+        };
+        Ok(Self {
+            station: u16::try_from(digits(station)?).map_err(|_| INVALID)?,
+            child,
+        })
+    }
+}
+
+impl FromStr for StopId {
+    type Err = GtfsErr;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s.as_bytes())
+    }
+}
+
+impl fmt::Display for StopId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.child {
+            Some(child) => write!(f, "{}.{}", self.station, child),
+            None => write!(f, "{}", self.station),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum LocationType {
+    #[default]
+    Platform,
+    Station,
+    Entrance,
+}
+
 #[derive(Default, Debug)]
 /// a record like 41,,Santurtzi,  43.32895,  -3.03421,B2,1,
 pub struct Stop {
-    pub id: i16,
+    pub id: StopId,
+    pub code: String,
     pub name: String,
     pub lat: f32,
     pub lon: f32,
     // TODO: figure out all zone ids and parse them without allocs
     pub zone_id: String,
+    pub location_type: LocationType,
+    pub parent_station: Option<StopId>,
 }
 
 pub struct Stops<R> {
@@ -48,12 +107,26 @@ impl<R: std::io::Read> Stops<R> {
             return Ok(None);
         }
 
+        let location_type = match self.field_str(6)?.trim() {
+            "" | "0" => LocationType::Platform,
+            "1" => LocationType::Station,
+            "2" => LocationType::Entrance,
+            _ => return Err(GtfsErr::GtfsFormatErr("Unsupported stop location_type")),
+        };
+        let parent_station = match self.field_str(7)?.trim() {
+            "" => None,
+            id => Some(id.parse()?),
+        };
+
         Ok(Some(Stop {
             id: self.field(0)?,
+            code: self.field_str(1)?.trim().to_owned(),
             name: self.field_str(2)?.to_owned(),
             lat: self.field(3)?,
             lon: self.field(4)?,
             zone_id: self.field_str(5)?.to_owned(),
+            location_type,
+            parent_station,
         }))
     }
 }
@@ -90,6 +163,13 @@ stop_id,stop_code,stop_name,stop_lat,stop_lon,zone_id,location_type,parent_stati
         }
     }
 
+    fn station(station: u16) -> StopId {
+        StopId {
+            station,
+            child: None,
+        }
+    }
+
     #[test]
     fn parses_stops() {
         let stops = stops(INPUT);
@@ -98,19 +178,62 @@ stop_id,stop_code,stop_name,stop_lat,stop_lon,zone_id,location_type,parent_stati
 
         assert_eq!(stops.len(), 8);
 
-        assert_eq!(stops[0].id, 41);
+        assert_eq!(stops[0].id, station(41));
         assert_eq!(stops[0].name, "Santurtzi");
         assert!((stops[0].lat - 43.32895).abs() < 1e-5);
         assert!((stops[0].lon - -3.03421).abs() < 1e-5);
         assert_eq!(stops[0].zone_id, "B2");
+        assert_eq!(stops[0].location_type, LocationType::Station);
+        assert_eq!(stops[0].parent_station, None);
 
-        assert_eq!(stops[1].id, 6);
+        assert_eq!(stops[1].id, station(6));
         assert_eq!(stops[1].name, "Zazpikaleak/Casco Viejo");
         assert_eq!(stops[1].zone_id, "A");
 
-        assert_eq!(stops[7].id, 15);
+        assert_eq!(stops[7].id, station(15));
         assert_eq!(stops[7].name, "Erandio");
         assert_eq!(stops[7].zone_id, "B1");
+    }
+
+    #[test]
+    fn parses_platforms_and_entrances() {
+        let input = "\
+stop_id,stop_code,stop_name,stop_lat,stop_lon,zone_id,location_type,parent_station
+40.0,PEN,Peñota,  43.32198,  -3.02540,B2,0,40
+1.1,,40 (Ariz),  43.23767,  -2.88255,B0,2,1
+";
+        let stops: Vec<_> = stops(input).map(Result::unwrap).collect();
+
+        assert_eq!(
+            stops[0].id,
+            StopId {
+                station: 40,
+                child: Some(0)
+            }
+        );
+        assert_eq!(stops[0].code, "PEN");
+        assert_eq!(stops[0].location_type, LocationType::Platform);
+        assert_eq!(stops[0].parent_station, Some(station(40)));
+
+        assert_eq!(
+            stops[1].id,
+            StopId {
+                station: 1,
+                child: Some(1)
+            }
+        );
+        assert_eq!(stops[1].location_type, LocationType::Entrance);
+        assert_eq!(stops[1].parent_station, Some(station(1)));
+    }
+
+    #[test]
+    fn stop_id_roundtrips_through_display() {
+        for id in ["40", "40.0", "51.3"] {
+            assert_eq!(id.parse::<StopId>().unwrap().to_string(), id);
+        }
+        assert!("".parse::<StopId>().is_err());
+        assert!("4a".parse::<StopId>().is_err());
+        assert!("70000".parse::<StopId>().is_err());
     }
 
     #[test]
