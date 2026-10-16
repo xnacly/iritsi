@@ -304,6 +304,19 @@ impl Store {
             .optional()?)
     }
 
+    pub fn validity(&self) -> Result<Option<(u32, u32)>, CoreErr> {
+        let range: (Option<u32>, Option<u32>) = self.conn.query_row(
+            "SELECT MIN(d), MAX(d) FROM (
+                SELECT start_date AS d FROM calendar
+                UNION ALL SELECT end_date FROM calendar
+                UNION ALL SELECT date FROM calendar_dates WHERE exception = 1
+            )",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(range.0.zip(range.1))
+    }
+
     pub fn timetable_stats(&self) -> Result<(u32, u32, u32, Option<u32>, Option<u32>), CoreErr> {
         Ok(self.conn.query_row(
             "SELECT

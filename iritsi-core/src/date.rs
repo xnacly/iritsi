@@ -55,6 +55,26 @@ impl Date {
             day: date % 100,
         }
     }
+
+    pub fn today() -> Self {
+        LocalTime::madrid(crate::unix_now()).date
+    }
+
+    pub fn parse(iso: &str) -> Option<Self> {
+        let mut parts = iso.trim().splitn(3, '-');
+        let year = parts.next()?.parse().ok()?;
+        let month = parts.next()?.parse().ok()?;
+        let day = parts.next()?.parse().ok()?;
+        if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+            return None;
+        }
+        let date = Self { year, month, day };
+        (civil_from_epoch_day(date.epoch_day()) == (year, month, day)).then_some(date)
+    }
+
+    fn epoch_day(self) -> i32 {
+        epoch_day(self.year, self.month, self.day)
+    }
 }
 
 impl std::fmt::Display for Date {
@@ -71,6 +91,31 @@ pub struct LocalTime {
 }
 
 impl LocalTime {
+    pub fn new(date: Date, hour: u32, minute: u32) -> Option<Self> {
+        (hour < 24 && minute < 60).then_some(Self { date, hour, minute })
+    }
+
+    pub fn parse(date: &str, time: &str) -> Option<Self> {
+        let mut parts = time.trim().split(':');
+        let hour = parts.next()?.parse().ok()?;
+        let minute = parts.next()?.parse().ok()?;
+        Self::new(Date::parse(date)?, hour, minute)
+    }
+
+    pub fn time(&self) -> String {
+        format!("{:02}:{:02}", self.hour, self.minute)
+    }
+
+    pub fn to_unix(self) -> i64 {
+        let local =
+            self.date.epoch_day() as i64 * DAY + self.hour as i64 * HOUR + self.minute as i64 * 60;
+        [2 * HOUR, HOUR]
+            .into_iter()
+            .map(|offset| (offset, local - offset))
+            .find(|&(offset, unix)| madrid_utc_offset(unix) == offset)
+            .map_or(local - HOUR, |(_, unix)| unix)
+    }
+
     pub fn madrid(unix: i64) -> Self {
         let local = unix + madrid_utc_offset(unix);
         let (year, month, day) = civil_from_epoch_day(local.div_euclid(DAY) as i32);
@@ -185,6 +230,38 @@ mod tests {
             "2026-09-18 00:01"
         );
         assert_eq!(Date::from_yyyymmdd(20261116).to_string(), "2026-11-16");
+    }
+
+    #[test]
+    fn parses_dates_and_times() {
+        assert_eq!(Date::parse("2026-10-16").unwrap().to_string(), "2026-10-16");
+        assert_eq!(Date::parse("2026-02-29"), None);
+        assert_eq!(Date::parse("2026-13-01"), None);
+        assert_eq!(Date::parse("yesterday"), None);
+        let time = LocalTime::parse("2026-10-16", "08:05").unwrap();
+        assert_eq!(time.to_string(), "2026-10-16 08:05");
+        assert_eq!(time.time(), "08:05");
+        assert!(LocalTime::parse("2026-10-16", "08:05:00").is_some());
+        assert_eq!(LocalTime::parse("2026-10-16", "24:00"), None);
+    }
+
+    #[test]
+    fn converts_madrid_local_times_to_instants() {
+        let utc = |y, m, d, h| epoch_day(y, m, d) as i64 * DAY + h * HOUR;
+        let local = |date: &str, time: &str| LocalTime::parse(date, time).unwrap().to_unix();
+
+        assert_eq!(local("2026-09-17", "08:00"), utc(2026, 9, 17, 6));
+        assert_eq!(local("2026-12-01", "08:00"), utc(2026, 12, 1, 7));
+        assert_eq!(local("2026-03-29", "02:30"), utc(2026, 3, 29, 1) + 30 * 60);
+        assert_eq!(local("2026-10-25", "02:30"), utc(2026, 10, 25, 0) + 30 * 60);
+
+        for unix in (utc(2026, 1, 1, 0)..utc(2027, 1, 1, 0)).step_by(7 * 60 + 13) {
+            let unix = unix - unix % 60;
+            let time = LocalTime::madrid(unix);
+            if time.to_unix() != unix {
+                assert_eq!(LocalTime::madrid(time.to_unix()), time);
+            }
+        }
     }
 
     #[test]

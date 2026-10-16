@@ -375,6 +375,20 @@ impl Iritsi {
         self.store().clear_favorites()
     }
 
+    pub fn validity(&self) -> Result<Option<(Date, Date)>, CoreErr> {
+        Ok(self
+            .store()
+            .validity()?
+            .map(|(from, until)| (Date::from_yyyymmdd(from), Date::from_yyyymmdd(until))))
+    }
+
+    pub fn search_range(&self) -> Result<Option<(Date, Date)>, CoreErr> {
+        Ok(self.validity()?.and_then(|(from, until)| {
+            let from = from.max(Date::today());
+            (from <= until).then_some((from, until))
+        }))
+    }
+
     pub fn timetable_info(&self) -> Result<TimetableInfo, CoreErr> {
         let store = self.store();
         let (stations, trips, stop_times, valid_from, valid_until) = store.timetable_stats()?;
@@ -631,6 +645,22 @@ mod tests {
             .unwrap();
         assert!(iritsi.timetable_info().unwrap().checked_at.is_some());
 
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn knows_which_dates_the_timetable_covers() {
+        let (iritsi, dir) = ingested();
+        let (from, until) = iritsi.validity().unwrap().unwrap();
+        assert_eq!(
+            (from.to_string(), until.to_string()),
+            ("2026-09-10".into(), "2026-10-10".into())
+        );
+        let today = Date::today();
+        match iritsi.search_range().unwrap() {
+            Some((from, until)) => assert!(from >= today && from <= until),
+            None => assert!(today > until),
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 
