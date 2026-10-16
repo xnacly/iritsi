@@ -73,6 +73,11 @@ CREATE TABLE IF NOT EXISTS station_lines (
 
 pub const META_FEED_HASH: &str = "feed_hash";
 pub const META_LAST_CHECK: &str = "last_check";
+pub const META_IMPORTED_AT: &str = "imported_at";
+pub const META_SOURCE: &str = "source";
+pub const META_DOWNLOAD_MS: &str = "download_ms";
+pub const META_IMPORT_MS: &str = "import_ms";
+pub const META_FEED_SIZE: &str = "feed_size";
 
 const SCHEMA_VERSION: i64 = 2;
 
@@ -86,6 +91,10 @@ const USER_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS user.favorites (
     station_id TEXT PRIMARY KEY,
     added_at INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS user.settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 ) WITHOUT ROWID;
 ";
 
@@ -121,6 +130,11 @@ impl Store {
         conn.execute("ATTACH DATABASE ?1 AS user", [user.to_string_lossy()])?;
         conn.execute_batch(USER_SCHEMA)?;
         Ok(Self { conn })
+    }
+
+    #[cfg(test)]
+    pub fn conn(&self) -> &Connection {
+        &self.conn
     }
 
     pub fn meta(&self, key: &str) -> Result<Option<i64>, CoreErr> {
@@ -280,6 +294,33 @@ impl Store {
             .optional()?)
     }
 
+    pub fn timetable_stats(&self) -> Result<(u32, u32, u32, Option<u32>, Option<u32>), CoreErr> {
+        Ok(self.conn.query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM stops WHERE location_type = 1),
+                (SELECT COUNT(*) FROM trips),
+                (SELECT COUNT(*) FROM stop_times),
+                (SELECT MIN(d) FROM (
+                    SELECT start_date AS d FROM calendar
+                    UNION ALL SELECT date FROM calendar_dates WHERE exception = 1
+                )),
+                (SELECT MAX(d) FROM (
+                    SELECT end_date AS d FROM calendar
+                    UNION ALL SELECT date FROM calendar_dates WHERE exception = 1
+                ))",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )?)
+    }
+
     pub fn favorites(&self) -> Result<Vec<Station>, CoreErr> {
         self.conn
             .prepare_cached(&format!(
@@ -288,6 +329,38 @@ impl Store {
             .query_map([], Station::from_row)?
             .map(|row| Ok(row?))
             .collect()
+    }
+
+    pub fn setting(&self, key: &str) -> Result<Option<String>, CoreErr> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT value FROM user.settings WHERE key = ?1")?
+            .query_row([key], |row| row.get(0))
+            .optional()?)
+    }
+
+    pub fn set_setting(&self, key: &str, value: Option<&str>) -> Result<(), CoreErr> {
+        match value {
+            Some(value) => self
+                .conn
+                .prepare_cached("INSERT OR REPLACE INTO user.settings VALUES (?1, ?2)")?
+                .execute([key, value])?,
+            None => self
+                .conn
+                .prepare_cached("DELETE FROM user.settings WHERE key = ?1")?
+                .execute([key])?,
+        };
+        Ok(())
+    }
+
+    pub fn clear_settings(&self) -> Result<(), CoreErr> {
+        self.conn.execute("DELETE FROM user.settings", [])?;
+        Ok(())
+    }
+
+    pub fn clear_favorites(&self) -> Result<(), CoreErr> {
+        self.conn.execute("DELETE FROM user.favorites", [])?;
+        Ok(())
     }
 
     pub fn set_favorite(&self, id: StopId, favorite: bool, now: i64) -> Result<(), CoreErr> {

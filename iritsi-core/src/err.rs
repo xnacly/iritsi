@@ -7,6 +7,8 @@ pub enum CoreErr {
     IO(std::io::Error),
     Http(ureq::Error),
     NoDataDir,
+    InvalidColor(String),
+    InvalidDepartures(u32),
 }
 
 impl From<GtfsErr> for CoreErr {
@@ -41,6 +43,8 @@ impl std::fmt::Display for CoreErr {
             CoreErr::IO(err) => write!(f, "io: {err}"),
             CoreErr::Http(err) => write!(f, "download: {err}"),
             CoreErr::NoDataDir => f.write_str("no data directory"),
+            CoreErr::InvalidDepartures(count) => write!(f, "can not show {count} departures"),
+            CoreErr::InvalidColor(color) => write!(f, "invalid color {color}, expected #rrggbb"),
         }
     }
 }
