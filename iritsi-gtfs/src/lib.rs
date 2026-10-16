@@ -133,12 +133,16 @@ mod gtfs {
         let src = include_bytes!("../../google_transit.zip");
         let mut schedule = GtfsSchedule::new(src).unwrap();
 
-        assert_eq!(schedule.routes().unwrap().count(), 1);
-        assert_eq!(schedule.calendars().unwrap().count(), 4);
-        assert_eq!(schedule.calendar_dates().unwrap().count(), 16);
-        assert_eq!(schedule.stops().unwrap().count(), 191);
-        assert_eq!(schedule.trips().unwrap().count(), 6738);
-        assert_eq!(schedule.shapes().unwrap().count(), 18_362);
-        assert!(schedule.stop_times().unwrap().next().unwrap().is_ok());
+        fn rows<T>(iter: impl Iterator<Item = Result<T, GtfsErr>>) -> usize {
+            iter.collect::<Result<Vec<_>, _>>().unwrap().len()
+        }
+
+        assert_eq!(rows(schedule.routes().unwrap()), 1);
+        assert_eq!(rows(schedule.calendars().unwrap()), 4);
+        assert_eq!(rows(schedule.calendar_dates().unwrap()), 16);
+        assert_eq!(rows(schedule.stops().unwrap()), 191);
+        assert_eq!(rows(schedule.trips().unwrap()), 6738);
+        assert_eq!(rows(schedule.shapes().unwrap()), 18_362);
+        assert_eq!(rows(schedule.stop_times().unwrap()), 173_557);
     }
 }
