@@ -266,7 +266,10 @@ fn App() -> Element {
             @font-face {{ font-family: 'Maple Mono'; src: url('{MAPLE_MONO}') format('truetype'); font-weight: 100 800; font-display: block; }}"
         }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
-        document::Meta { name: "viewport", content: "width=device-width, initial-scale=1" }
+        document::Meta {
+            name: "viewport",
+            content: "width=device-width, initial-scale=1, viewport-fit=cover",
+        }
         match CORE.get() {
             Some(Err(err)) => rsx! {
                 main { class: "error",

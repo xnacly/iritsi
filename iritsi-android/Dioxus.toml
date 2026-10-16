@@ -1,4 +1,5 @@
 [application]
+android_main_activity = "android/MainActivity.kt"
 
 [web.app]
 
@@ -19,3 +20,12 @@ script = []
 # Javascript code file
 # serve: [dev-server] only
 script = []
+
+[bundle]
+identifier = "me.xnacly.iritsi"
+publisher = "xnacly"
+
+[android]
+min_sdk = 37
+target_sdk = 37
+compile_sdk = 36

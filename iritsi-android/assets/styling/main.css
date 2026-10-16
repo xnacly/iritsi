@@ -32,8 +32,12 @@ body {
     -webkit-tap-highlight-color: transparent;
 }
 
+body {
+    padding-top: env(safe-area-inset-top);
+}
+
 main {
-    padding: 16px 16px calc(var(--tabs) + 24px);
+    padding: 16px 16px calc(var(--tabs) + env(safe-area-inset-bottom) + 24px);
 }
 
 h1 {
@@ -100,11 +104,11 @@ button {
     left: 0;
     right: 0;
     bottom: 0;
-    height: var(--tabs);
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     background: var(--surface);
     border-top: var(--border);
+    height: calc(var(--tabs) + env(safe-area-inset-bottom));
     padding-bottom: env(safe-area-inset-bottom);
 }
 
