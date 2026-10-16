@@ -1,21 +1,22 @@
 use std::path::Path;
 
-use iritsi_gtfs::{GtfsErr, GtfsSchedule, LocationType, ServiceException, StopId};
+use iritsi_gtfs::{GtfsSchedule, LocationType, ServiceException, StopId};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::{Departure, Station, err::CoreErr};
+use crate::{Departure, Station, date::ServiceDay, err::CoreErr};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS stops (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
+    gtfs_id TEXT NOT NULL,
     code TEXT NOT NULL,
     name TEXT NOT NULL,
     lat REAL NOT NULL,
     lon REAL NOT NULL,
     zone_id TEXT NOT NULL,
     location_type INTEGER NOT NULL,
-    parent_station TEXT
-) WITHOUT ROWID;
+    parent_station INTEGER
+);
 CREATE TABLE IF NOT EXISTS routes (
     id TEXT PRIMARY KEY,
     short_name TEXT NOT NULL,
@@ -36,7 +37,7 @@ CREATE TABLE IF NOT EXISTS stop_times (
     stop_seq INTEGER NOT NULL,
     arrival_time INTEGER NOT NULL,
     departure_time INTEGER NOT NULL,
-    stop_id TEXT NOT NULL,
+    stop_id INTEGER NOT NULL,
     PRIMARY KEY (trip_id, stop_seq)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS calendar (
@@ -62,13 +63,25 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value INTEGER NOT NULL
 ) WITHOUT ROWID;
+";
+
+pub const META_FEED_HASH: &str = "feed_hash";
+pub const META_LAST_CHECK: &str = "last_check";
+
+const SCHEMA_VERSION: i64 = 2;
+
+const INDEXES: &str = "
 CREATE INDEX IF NOT EXISTS stop_times_by_stop ON stop_times (stop_id, departure_time);
 CREATE INDEX IF NOT EXISTS stops_by_parent ON stops (parent_station);
 CREATE INDEX IF NOT EXISTS calendar_dates_by_date ON calendar_dates (date);
 ";
 
-pub const META_FEED_HASH: &str = "feed_hash";
-pub const META_LAST_CHECK: &str = "last_check";
+const STATION_SELECT: &str = "
+SELECT s.id, s.name, s.zone_id, s.lat, s.lon
+FROM stops s
+WHERE s.location_type = 1";
+
+const STATION_ORDER: &str = "ORDER BY s.name";
 
 pub struct Store {
     conn: Connection,
@@ -76,8 +89,15 @@ pub struct Store {
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self, CoreErr> {
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
+        if !is_current(&conn)? {
+            drop(conn);
+            std::fs::remove_file(path)?;
+            conn = Connection::open(path)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
         conn.execute_batch(SCHEMA)?;
+        conn.execute_batch(INDEXES)?;
         Ok(Self { conn })
     }
 
@@ -96,8 +116,15 @@ impl Store {
     pub fn ingest(path: &Path, gtfs: &[u8], meta: &[(&str, i64)]) -> Result<(), CoreErr> {
         let mut schedule = GtfsSchedule::new(gtfs)?;
         let mut conn = Connection::open(path)?;
-        conn.execute_batch("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode = OFF;
+            PRAGMA synchronous = OFF;
+            PRAGMA locking_mode = EXCLUSIVE;
+            PRAGMA temp_store = MEMORY;
+            PRAGMA cache_size = -65536;",
+        )?;
         conn.execute_batch(SCHEMA)?;
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
 
         let tx = conn.transaction()?;
         for &(key, value) in meta {
@@ -105,7 +132,7 @@ impl Store {
         }
         {
             let mut insert =
-                tx.prepare("INSERT INTO stops VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")?;
+                tx.prepare("INSERT INTO stops VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")?;
             for stop in schedule.stops()? {
                 let stop = stop?;
                 let location_type = match stop.location_type {
@@ -114,6 +141,7 @@ impl Store {
                     LocationType::Entrance => 2,
                 };
                 insert.execute(params![
+                    key(stop.id),
                     stop.id.to_string(),
                     stop.code,
                     stop.name,
@@ -121,7 +149,7 @@ impl Store {
                     stop.lon,
                     stop.zone_id,
                     location_type,
-                    stop.parent_station.map(|id| id.to_string()),
+                    stop.parent_station.map(key),
                 ])?;
             }
 
@@ -158,7 +186,7 @@ impl Store {
                     stop_time.stop_seq,
                     stop_time.arrival_time,
                     stop_time.departure_time,
-                    stop_time.stop_id.to_string(),
+                    key(stop_time.stop_id),
                 ])?;
             }
 
@@ -200,17 +228,16 @@ impl Store {
                 ])?;
             }
         }
+        tx.execute_batch(INDEXES)?;
         tx.commit()?;
-        conn.execute_batch("ANALYZE;")?;
+        conn.execute_batch("PRAGMA analysis_limit = 400; ANALYZE;")?;
         Ok(())
     }
 
     pub fn search_stations(&self, query: &str) -> Result<Vec<Station>, CoreErr> {
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT id, name, zone_id, lat, lon FROM stops
-             WHERE location_type = 1 AND name LIKE '%' || ?1 || '%' ESCAPE '\\'
-             ORDER BY name",
-        )?;
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "{STATION_SELECT} AND s.name LIKE '%' || ?1 || '%' ESCAPE '\\' {STATION_ORDER}"
+        ))?;
         let escaped = query
             .replace('\\', "\\\\")
             .replace('%', "\\%")
@@ -223,21 +250,19 @@ impl Store {
     pub fn station(&self, id: StopId) -> Result<Option<Station>, CoreErr> {
         Ok(self
             .conn
-            .prepare_cached(
-                "SELECT id, name, zone_id, lat, lon FROM stops WHERE location_type = 1 AND id = ?1",
-            )?
-            .query_row([id.to_string()], Station::from_row)
+            .prepare_cached(&format!("{STATION_SELECT} AND s.id = ?1"))?
+            .query_row([key(id)], Station::from_row)
             .optional()?)
     }
 
     pub fn departures(
         &self,
         station: StopId,
-        date: u32,
-        after: u32,
+        day: ServiceDay,
+        after: i64,
         limit: u32,
     ) -> Result<Vec<Departure>, CoreErr> {
-        let weekday = crate::date::weekday(date).ok_or(CoreErr::InvalidDate(date))?;
+        let start = day.start();
         let mut stmt = self.conn.prepare_cached(
             "WITH active(service_id) AS (
                 SELECT service_id FROM calendar
@@ -261,12 +286,12 @@ impl Store {
             LIMIT ?5",
         )?;
         stmt.query_map(
-            params![station.to_string(), date, weekday, after, limit],
+            params![key(station), day.date(), day.weekday(), after.max(0), limit],
             |row| {
                 Ok(Departure {
                     trip_id: row.get(0)?,
-                    departure_time: row.get(1)?,
-                    platform: parse_id(row.get_ref(2)?.as_str()?)?,
+                    departs_at: start + row.get::<_, i64>(1)?,
+                    platform: from_key(row.get(2)?),
                     headsign: row.get(3)?,
                     direction_id: row.get(4)?,
                 })
@@ -283,24 +308,72 @@ fn set_meta(conn: &Connection, key: &str, value: i64) -> Result<(), CoreErr> {
     Ok(())
 }
 
-fn parse_id(id: &str) -> rusqlite::Result<StopId> {
-    id.parse().map_err(|err: GtfsErr| {
-        rusqlite::Error::FromSqlConversionFailure(
-            0,
-            rusqlite::types::Type::Text,
-            format!("{err:?}").into(),
-        )
-    })
+fn is_current(conn: &Connection) -> Result<bool, CoreErr> {
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let tables: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_schema", [], |row| row.get(0))?;
+    Ok(version == SCHEMA_VERSION || tables == 0)
+}
+
+fn key(id: StopId) -> i64 {
+    id.station as i64 * 1000 + id.child.map_or(999, i64::from)
+}
+
+fn from_key(key: i64) -> StopId {
+    StopId {
+        station: (key / 1000) as u16,
+        child: match key % 1000 {
+            999 => None,
+            child => Some(child as u8),
+        },
+    }
 }
 
 impl Station {
     fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
         Ok(Self {
-            id: parse_id(row.get_ref(0)?.as_str()?)?,
+            id: from_key(row.get(0)?),
             name: row.get(1)?,
             zone_id: row.get(2)?,
             lat: row.get(3)?,
             lon: row.get(4)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stop_keys_roundtrip() {
+        for id in ["40", "40.0", "40.3", "1", "51.255"] {
+            let id: StopId = id.parse().unwrap();
+            assert_eq!(from_key(key(id)), id);
+        }
+        assert_eq!(key("40".parse().unwrap()), 40_999);
+        assert_eq!(key("40.0".parse().unwrap()), 40_000);
+    }
+
+    #[test]
+    fn replaces_timetables_of_older_schemas() {
+        let dir = std::env::temp_dir().join(format!("iritsi-store-schema-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("iritsi.db");
+        let old = Connection::open(&path).unwrap();
+        old.execute_batch(
+            "CREATE TABLE stops (id TEXT PRIMARY KEY); INSERT INTO stops VALUES ('1');",
+        )
+        .unwrap();
+        drop(old);
+
+        let store = Store::open(&path).unwrap();
+        let version: i64 = store
+            .conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert!(store.search_stations("").unwrap().is_empty());
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -6,7 +6,7 @@ pub enum CoreErr {
     Db(rusqlite::Error),
     IO(std::io::Error),
     Http(ureq::Error),
-    InvalidDate(u32),
+    NoDataDir,
 }
 
 impl From<GtfsErr> for CoreErr {
@@ -32,3 +32,17 @@ impl From<ureq::Error> for CoreErr {
         Self::Http(value)
     }
 }
+
+impl std::fmt::Display for CoreErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CoreErr::Gtfs(err) => write!(f, "gtfs: {err}"),
+            CoreErr::Db(err) => write!(f, "database: {err}"),
+            CoreErr::IO(err) => write!(f, "io: {err}"),
+            CoreErr::Http(err) => write!(f, "download: {err}"),
+            CoreErr::NoDataDir => f.write_str("no data directory"),
+        }
+    }
+}
+
+impl std::error::Error for CoreErr {}
