@@ -1,7 +1,10 @@
 use dioxus::prelude::*;
 use iritsi_core::{unix_now, StopId, Watch};
 
-use crate::{components::DepartureList, core, set_watch};
+use crate::{
+    components::{DepartureList, WhenPicker},
+    core, set_watch, PLAN_AT,
+};
 
 const TEST_CHANGE: &str = "San Ignazio";
 
@@ -24,7 +27,7 @@ pub fn Journey(from: StopId, to: StopId) -> Element {
             .and_then(|found| found.into_iter().next());
         let journey = via.and_then(|via| {
             core()
-                .journey_via(from, via.id, to, unix_now())
+                .journey_via(from, via.id, to, PLAN_AT().unwrap_or_else(unix_now))
                 .ok()
                 .flatten()
         });
@@ -37,11 +40,12 @@ pub fn Journey(from: StopId, to: StopId) -> Element {
     rsx! {
         h1 { "{from_name} -> {to_name}" }
         p { class: "hint", "Route planning is not available yet" }
+        WhenPicker { label: "Leave", at: PLAN_AT.signal() }
         button { class: "action", onclick: watch_test_trip, "Watch test trip via {TEST_CHANGE}" }
         if missing() {
             p { class: "empty", "No test trip via {TEST_CHANGE} found" }
         }
         h2 { class: "section", "Next trains from {from_name}" }
-        DepartureList { station: from }
+        DepartureList { station: from, at: PLAN_AT.signal() }
     }
 }

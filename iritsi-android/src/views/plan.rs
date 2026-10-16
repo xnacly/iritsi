@@ -2,8 +2,8 @@ use dioxus::prelude::*;
 use iritsi_core::Station;
 
 use crate::{
-    components::{Icon, LineBadge},
-    Route, Slot, FROM, TO,
+    components::{Icon, LineBadge, WhenPicker},
+    Route, Slot, FROM, PLAN_AT, TO,
 };
 
 #[component]
@@ -34,6 +34,7 @@ pub fn Plan() -> Element {
             }
             SlotButton { slot: Slot::To, station: to }
         }
+        WhenPicker { label: "Leave", at: PLAN_AT.signal() }
         match journey {
             Some(route) => rsx! { Link { class: "primary", to: route, "Find route" } },
             None => rsx! { p { class: "hint", "Pick two different stations" } },

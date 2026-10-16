@@ -6,7 +6,7 @@ use iritsi_core::{StopId, TimeDisplay};
 use crate::{core, set_watch, DATA_VERSION, SETTINGS, WATCH};
 
 #[component]
-pub fn DepartureList(station: StopId) -> Element {
+pub fn DepartureList(station: StopId, at: Signal<Option<i64>>) -> Element {
     let mut tick = use_signal(|| 0u64);
     use_future(move || async move {
         loop {
@@ -19,9 +19,11 @@ pub fn DepartureList(station: StopId) -> Element {
         tick.read();
         DATA_VERSION.read();
         let limit = SETTINGS.read().departures;
-        core()
-            .departures(station, limit)
-            .map_err(|err| err.to_string())
+        match at() {
+            Some(at) => core().departures_at(station, at, limit),
+            None => core().departures(station, limit),
+        }
+        .map_err(|err| err.to_string())
     });
 
     let display = SETTINGS.read().time_display;
@@ -29,8 +31,9 @@ pub fn DepartureList(station: StopId) -> Element {
         iritsi_core::Watch::Departure(leg) => Some(leg.trip_id),
         iritsi_core::Watch::Journey(_) => None,
     });
-    let clock = display != TimeDisplay::Countdown;
-    let countdown = display != TimeDisplay::Clock;
+    let later = at().is_some();
+    let clock = later || display != TimeDisplay::Countdown;
+    let countdown = !later && display != TimeDisplay::Clock;
 
     rsx! {
         match &*departures.read() {

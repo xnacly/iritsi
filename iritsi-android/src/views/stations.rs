@@ -2,8 +2,8 @@ use dioxus::prelude::*;
 use iritsi_core::{Station, StopId};
 
 use crate::{
-    components::{DepartureList, FavoriteToggle, LineBadge, StationList},
-    core, Route, DATA_VERSION, STATION_QUERY,
+    components::{DepartureList, FavoriteToggle, LineBadge, StationList, WhenPicker},
+    core, Route, DATA_VERSION, STATION_AT, STATION_QUERY,
 };
 
 #[component]
@@ -40,8 +40,9 @@ pub fn StationDetail(id: StopId) -> Element {
                     }
                     FavoriteToggle { id, favorite: station.favorite }
                 }
+                WhenPicker { label: "Departures from", at: STATION_AT.signal() }
                 h2 { class: "section", "Departures" }
-                DepartureList { station: id }
+                DepartureList { station: id, at: STATION_AT.signal() }
             },
             None => rsx! { p { class: "error", "Unknown station {id}" } },
         }

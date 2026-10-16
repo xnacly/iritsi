@@ -113,6 +113,8 @@ pub static TO: GlobalSignal<Option<Station>> = Signal::global(|| None);
 pub(crate) static TAB_ROUTES: GlobalSignal<[Route; 3]> =
     Signal::global(|| [Route::Plan {}, Route::Stations {}, Route::About {}]);
 pub static STATION_QUERY: GlobalSignal<String> = Signal::global(String::new);
+pub static PLAN_AT: GlobalSignal<Option<i64>> = Signal::global(|| None);
+pub static STATION_AT: GlobalSignal<Option<i64>> = Signal::global(|| None);
 pub static SETTINGS: GlobalSignal<Settings> =
     Signal::global(|| core().settings().unwrap_or_default());
 pub static WATCH: GlobalSignal<Option<Watch>> =

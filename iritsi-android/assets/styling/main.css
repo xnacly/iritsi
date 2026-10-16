@@ -822,3 +822,53 @@ ul.departures li.watched {
     margin-left: -3px;
     background: var(--ink);
 }
+
+.when {
+    display: grid;
+    gap: 8px;
+    margin: 24px 0 0;
+}
+
+.when > .label {
+    font-family: var(--display);
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+.when-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    border: var(--border);
+    box-shadow: var(--shadow);
+    background: var(--surface);
+}
+
+.when-row > * + * {
+    border-left: var(--border);
+}
+
+.when-row .now {
+    padding: 0 14px;
+    background: var(--surface);
+    border: 0;
+    font-family: var(--display);
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+.when-row .now.active {
+    background: var(--orange);
+    color: var(--on-accent);
+    text-shadow: 1px 0 0 currentColor;
+}
+
+.when-row input {
+    min-width: 0;
+    padding: 12px 10px;
+    border: 0;
+    background: var(--surface);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 15px;
+    font-weight: 700;
+}
