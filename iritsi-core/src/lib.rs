@@ -1,12 +1,20 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime},
+};
 
 pub use err::CoreErr;
 pub use iritsi_gtfs::StopId;
+pub use remote::FEED_URL;
+use store::{META_FEED_HASH, META_LAST_CHECK};
+
+pub const REFRESH_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
 
 mod date;
 mod err;
 ///! file system abstraction for atomic storage updates
 mod fs;
+mod remote;
 ///! sqlite backed data store engine
 mod store;
 
@@ -28,6 +36,13 @@ pub struct Departure {
     pub direction_id: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refresh {
+    Skipped,
+    Unchanged,
+    Updated,
+}
+
 pub struct Iritsi {
     path: PathBuf,
     store: store::Store,
@@ -40,8 +55,43 @@ impl Iritsi {
         Ok(Self { path, store })
     }
 
+    pub fn has_data(&self) -> Result<bool, CoreErr> {
+        Ok(self.store.meta(META_FEED_HASH)?.is_some())
+    }
+
+    pub fn refresh(&mut self) -> Result<Refresh, CoreErr> {
+        let now = unix_now();
+        if let Some(last_check) = self.store.meta(META_LAST_CHECK)?
+            && now.saturating_sub(last_check) < REFRESH_INTERVAL.as_secs() as i64
+        {
+            return Ok(Refresh::Skipped);
+        }
+        self.force_refresh()
+    }
+
+    pub fn force_refresh(&mut self) -> Result<Refresh, CoreErr> {
+        let feed = remote::fetch(FEED_URL)?;
+        self.apply_feed(&feed, unix_now())
+    }
+
+    fn apply_feed(&mut self, feed: &[u8], now: i64) -> Result<Refresh, CoreErr> {
+        let hash = remote::hash(feed) as i64;
+        if self.store.meta(META_FEED_HASH)? == Some(hash) {
+            self.store.set_meta(META_LAST_CHECK, now)?;
+            return Ok(Refresh::Unchanged);
+        }
+        self.replace(feed, &[(META_FEED_HASH, hash), (META_LAST_CHECK, now)])?;
+        Ok(Refresh::Updated)
+    }
+
     pub fn ingest(&mut self, gtfs: &[u8]) -> Result<(), CoreErr> {
-        fs::atomic_replace(&self.path, |tmp: &Path| store::Store::ingest(tmp, gtfs))?;
+        self.replace(gtfs, &[(META_FEED_HASH, remote::hash(gtfs) as i64)])
+    }
+
+    fn replace(&mut self, gtfs: &[u8], meta: &[(&str, i64)]) -> Result<(), CoreErr> {
+        fs::atomic_replace(&self.path, |tmp: &Path| {
+            store::Store::ingest(tmp, gtfs, meta)
+        })?;
         self.store = store::Store::open(&self.path)?;
         Ok(())
     }
@@ -65,6 +115,12 @@ impl Iritsi {
     }
 }
 
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,6 +137,44 @@ mod tests {
         let mut iritsi = Iritsi::open(dir.join("iritsi.db")).unwrap();
         iritsi.ingest(GTFS).unwrap();
         (iritsi, dir)
+    }
+
+    #[test]
+    fn skips_ingesting_an_unchanged_feed() {
+        let (mut iritsi, dir) = ingested();
+        assert!(iritsi.has_data().unwrap());
+        assert_eq!(iritsi.store.meta(META_LAST_CHECK).unwrap(), None);
+
+        let now = unix_now();
+        assert_eq!(iritsi.apply_feed(GTFS, now).unwrap(), Refresh::Unchanged);
+        assert_eq!(iritsi.store.meta(META_LAST_CHECK).unwrap(), Some(now));
+        assert_eq!(iritsi.refresh().unwrap(), Refresh::Skipped);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn empty_database_has_no_data() {
+        let dir = std::env::temp_dir().join(format!("iritsi-core-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let iritsi = Iritsi::open(dir.join("iritsi.db")).unwrap();
+        assert!(!iritsi.has_data().unwrap());
+        assert!(iritsi.search_stations("").unwrap().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[ignore]
+    fn downloads_the_live_feed() {
+        let dir = std::env::temp_dir().join(format!("iritsi-core-live-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut iritsi = Iritsi::open(dir.join("iritsi.db")).unwrap();
+
+        assert_eq!(iritsi.refresh().unwrap(), Refresh::Updated);
+        assert_eq!(iritsi.refresh().unwrap(), Refresh::Skipped);
+        assert_eq!(iritsi.search_stations("").unwrap().len(), 42);
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

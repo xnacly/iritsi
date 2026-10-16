@@ -5,6 +5,7 @@ pub enum CoreErr {
     Gtfs(GtfsErr),
     Db(rusqlite::Error),
     IO(std::io::Error),
+    Http(ureq::Error),
     InvalidDate(u32),
 }
 
@@ -23,5 +24,11 @@ impl From<rusqlite::Error> for CoreErr {
 impl From<std::io::Error> for CoreErr {
     fn from(value: std::io::Error) -> Self {
         Self::IO(value)
+    }
+}
+
+impl From<ureq::Error> for CoreErr {
+    fn from(value: ureq::Error) -> Self {
+        Self::Http(value)
     }
 }

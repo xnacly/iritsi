@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 iritsi-gtfs = { path = "../iritsi-gtfs" }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+ureq = "3.4.2"

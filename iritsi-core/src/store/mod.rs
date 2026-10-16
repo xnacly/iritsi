@@ -58,10 +58,17 @@ CREATE TABLE IF NOT EXISTS shapes (
     distance_traveled REAL NOT NULL,
     PRIMARY KEY (shape_id, sequence)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
+) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS stop_times_by_stop ON stop_times (stop_id, departure_time);
 CREATE INDEX IF NOT EXISTS stops_by_parent ON stops (parent_station);
 CREATE INDEX IF NOT EXISTS calendar_dates_by_date ON calendar_dates (date);
 ";
+
+pub const META_FEED_HASH: &str = "feed_hash";
+pub const META_LAST_CHECK: &str = "last_check";
 
 pub struct Store {
     conn: Connection,
@@ -74,13 +81,28 @@ impl Store {
         Ok(Self { conn })
     }
 
-    pub fn ingest(path: &Path, gtfs: &[u8]) -> Result<(), CoreErr> {
+    pub fn meta(&self, key: &str) -> Result<Option<i64>, CoreErr> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT value FROM meta WHERE key = ?1")?
+            .query_row([key], |row| row.get(0))
+            .optional()?)
+    }
+
+    pub fn set_meta(&self, key: &str, value: i64) -> Result<(), CoreErr> {
+        set_meta(&self.conn, key, value)
+    }
+
+    pub fn ingest(path: &Path, gtfs: &[u8], meta: &[(&str, i64)]) -> Result<(), CoreErr> {
         let mut schedule = GtfsSchedule::new(gtfs)?;
         let mut conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;")?;
         conn.execute_batch(SCHEMA)?;
 
         let tx = conn.transaction()?;
+        for &(key, value) in meta {
+            set_meta(&tx, key, value)?;
+        }
         {
             let mut insert =
                 tx.prepare("INSERT INTO stops VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")?;
@@ -253,6 +275,12 @@ impl Store {
         .map(|row| Ok(row?))
         .collect()
     }
+}
+
+fn set_meta(conn: &Connection, key: &str, value: i64) -> Result<(), CoreErr> {
+    conn.prepare_cached("INSERT OR REPLACE INTO meta VALUES (?1, ?2)")?
+        .execute(params![key, value])?;
+    Ok(())
 }
 
 fn parse_id(id: &str) -> rusqlite::Result<StopId> {
