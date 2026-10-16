@@ -1,4 +1,4 @@
-use crate::{err::GtfsErr, num};
+use crate::{err::GtfsErr, num, stops::StopId};
 
 /// trip_id,stop_sequence,arrival_time,departure_time,stop_id,pickup_type
 /// 870583,3,09:53:02,09:53:20,40.0,0
@@ -6,11 +6,11 @@ use crate::{err::GtfsErr, num};
 /// 870583,5,09:55:42,09:55:59,38.0,0
 #[derive(Debug, PartialEq)]
 pub struct StopTime {
-    trip_id: u32,
-    stop_seq: u8,
-    arrival_time: u32,
-    departure_time: u32,
-    stop_id: f32,
+    pub trip_id: u32,
+    pub stop_seq: u8,
+    pub arrival_time: u32,
+    pub departure_time: u32,
+    pub stop_id: StopId,
 }
 
 impl TryFrom<&[u8]> for StopTime {
@@ -25,10 +25,7 @@ impl TryFrom<&[u8]> for StopTime {
         let arrival_time = num::unchecked_parse_time(fields.next().unwrap());
         let departure_time = num::unchecked_parse_time(fields.next().unwrap());
 
-        // PERF: technically this is not a floating point but rather <stop_id>.0; i dont know why
-        let stop_id = unsafe { str::from_utf8_unchecked(fields.next().unwrap()) }
-            .parse::<f32>()
-            .map_err(|_| GtfsErr::GtfsFormatErr("Failed to parse stop_times.stop_id as float"))?;
+        let stop_id = StopId::parse(fields.next().unwrap())?;
 
         Ok(Self {
             trip_id,
@@ -71,10 +68,7 @@ impl Iterator for StopTimes {
         }
 
         let rest = &self.src[self.pos..];
-        let end = rest
-            .iter()
-            .position(|&b| b == b'\n')
-            .unwrap_or_else(|| rest.len());
+        let end = rest.iter().position(|&b| b == b'\n').unwrap_or(rest.len());
 
         let line = &rest[..end];
         self.pos += end + (end < rest.len()) as usize;
@@ -91,8 +85,9 @@ mod tests {
         stop_seq: u8,
         arrival_time: u32,
         departure_time: u32,
-        stop_id: f32,
+        stop_id: &str,
     ) -> StopTime {
+        let stop_id = stop_id.parse().unwrap();
         StopTime {
             trip_id,
             stop_seq,
@@ -115,7 +110,7 @@ mod tests {
                 3,
                 9 * 3600 + 53 * 60 + 2,
                 9 * 3600 + 53 * 60 + 20,
-                40.0,
+                "40.0",
             )
         );
     }
@@ -140,21 +135,21 @@ mod tests {
                     3,
                     9 * 3600 + 53 * 60 + 2,
                     9 * 3600 + 53 * 60 + 20,
-                    40.0,
+                    "40.0",
                 ),
                 stop_time(
                     870583,
                     4,
                     9 * 3600 + 54 * 60 + 22,
                     9 * 3600 + 54 * 60 + 37,
-                    39.0,
+                    "39.0",
                 ),
                 stop_time(
                     870583,
                     5,
                     9 * 3600 + 55 * 60 + 42,
                     9 * 3600 + 55 * 60 + 59,
-                    38.0,
+                    "38.0",
                 ),
             ]
         );
@@ -175,7 +170,7 @@ mod tests {
                 3,
                 9 * 3600 + 53 * 60 + 2,
                 9 * 3600 + 53 * 60 + 20,
-                40.0,
+                "40.0",
             )
         );
 
@@ -247,11 +242,17 @@ mod tests {
     }
 
     #[test]
-    fn parses_stop_id_as_float() {
-        let input = b"870583,3,09:53:02,09:53:20,40.5,0";
+    fn parses_stop_id_as_platform() {
+        let input = b"870583,3,09:53:02,09:53:20,40.0,0";
 
         let actual = StopTime::try_from(input.as_slice()).unwrap();
 
-        assert_eq!(actual.stop_id, 40.5);
+        assert_eq!(
+            actual.stop_id,
+            StopId {
+                station: 40,
+                child: Some(0)
+            }
+        );
     }
 }
