@@ -3,7 +3,12 @@ use std::path::Path;
 use iritsi_gtfs::{GtfsSchedule, LocationType, ServiceException, StopId};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::{Departure, Line, Station, date::ServiceDay, err::CoreErr};
+use crate::{
+    Departure, Line, Station,
+    date::ServiceDay,
+    err::CoreErr,
+    watch::{Leg, StopCall},
+};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS stops (
@@ -96,6 +101,11 @@ CREATE TABLE IF NOT EXISTS user.settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS user.watch (
+    id INTEGER PRIMARY KEY CHECK (id = 0),
+    kind TEXT NOT NULL,
+    legs TEXT NOT NULL
+);
 ";
 
 const STATION_SELECT: &str = "
@@ -363,6 +373,25 @@ impl Store {
         Ok(())
     }
 
+    pub fn saved_watch(&self) -> Result<Option<(String, String)>, CoreErr> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT kind, legs FROM user.watch WHERE id = 0")?
+            .query_row([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?)
+    }
+
+    pub fn save_watch(&self, watch: Option<(&str, &str)>) -> Result<(), CoreErr> {
+        match watch {
+            Some((kind, legs)) => self
+                .conn
+                .prepare_cached("INSERT OR REPLACE INTO user.watch VALUES (0, ?1, ?2)")?
+                .execute([kind, legs])?,
+            None => self.conn.execute("DELETE FROM user.watch", [])?,
+        };
+        Ok(())
+    }
+
     pub fn set_favorite(&self, id: StopId, favorite: bool, now: i64) -> Result<(), CoreErr> {
         if favorite {
             self.conn
@@ -411,6 +440,7 @@ impl Store {
             |row| {
                 Ok(Departure {
                     trip_id: row.get(0)?,
+                    service_day_start: start,
                     departs_at: start + row.get::<_, i64>(1)?,
                     platform: from_key(row.get(2)?),
                     headsign: row.get(3)?,
@@ -420,6 +450,83 @@ impl Store {
         )?
         .map(|row| Ok(row?))
         .collect()
+    }
+}
+
+impl Store {
+    pub fn leg(
+        &self,
+        trip_id: u32,
+        service_day_start: i64,
+        board: StopId,
+        alight: Option<StopId>,
+    ) -> Result<Option<Leg>, CoreErr> {
+        let Some(headsign) = self
+            .conn
+            .prepare_cached("SELECT headsign FROM trips WHERE id = ?1")?
+            .query_row([trip_id], |row| row.get::<_, String>(0))
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT s.id, s.name, st.stop_id, st.arrival_time, st.departure_time
+            FROM stop_times st
+            JOIN stops p ON p.id = st.stop_id
+            JOIN stops s ON s.id = p.parent_station
+            WHERE st.trip_id = ?1
+            ORDER BY st.stop_seq",
+        )?;
+        let calls = stmt
+            .query_map([trip_id], |row| {
+                Ok(StopCall {
+                    station: from_key(row.get(0)?),
+                    name: row.get(1)?,
+                    platform: from_key(row.get(2)?),
+                    arrives_at: service_day_start + row.get::<_, i64>(3)?,
+                    departs_at: service_day_start + row.get::<_, i64>(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let line = self.trip_line(&calls)?;
+        let Some(from) = calls.iter().position(|call| call.station == board) else {
+            return Ok(None);
+        };
+        let to = match alight {
+            Some(alight) => match calls[from + 1..]
+                .iter()
+                .position(|call| call.station == alight)
+            {
+                Some(offset) => from + 1 + offset,
+                None => return Ok(None),
+            },
+            None => from,
+        };
+        Ok(Some(Leg {
+            trip_id,
+            service_day_start,
+            line,
+            headsign,
+            stops: calls[from..=to].to_vec(),
+        }))
+    }
+
+    fn trip_line(&self, calls: &[StopCall]) -> Result<Option<Line>, CoreErr> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT line FROM station_lines WHERE station_id = ?1")?;
+        let mut candidates = Line::ALL.to_vec();
+        for call in calls {
+            let lines = stmt
+                .query_map([key(call.station)], |row| row.get::<_, u8>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            candidates.retain(|line| lines.contains(&(*line as u8)));
+        }
+        Ok(match candidates.as_slice() {
+            [line] => Some(*line),
+            _ => None,
+        })
     }
 }
 

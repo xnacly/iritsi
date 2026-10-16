@@ -16,6 +16,9 @@ use store::{
     META_DOWNLOAD_MS, META_FEED_HASH, META_FEED_SIZE, META_IMPORT_MS, META_IMPORTED_AT,
     META_LAST_CHECK, META_SOURCE,
 };
+pub use watch::{
+    Alert, DEFAULT_LEAD, Journey, Leg, Phase, Progress as WatchProgress, Segment, StopCall, Watch,
+};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -30,6 +33,7 @@ mod remote;
 mod settings;
 ///! sqlite backed data store engine
 mod store;
+mod watch;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Station {
@@ -77,6 +81,7 @@ impl Line {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Departure {
     pub trip_id: u32,
+    pub service_day_start: i64,
     pub departs_at: i64,
     pub platform: StopId,
     pub headsign: String,
@@ -411,6 +416,124 @@ impl Iritsi {
 
     pub fn station(&self, id: StopId) -> Result<Option<Station>, CoreErr> {
         self.store().station(id)
+    }
+
+    pub fn leg(
+        &self,
+        trip_id: u32,
+        service_day_start: i64,
+        board: StopId,
+        alight: StopId,
+    ) -> Result<Option<Leg>, CoreErr> {
+        self.store()
+            .leg(trip_id, service_day_start, board, Some(alight))
+    }
+
+    pub fn journey_via(
+        &self,
+        from: StopId,
+        via: StopId,
+        to: StopId,
+        after: i64,
+    ) -> Result<Option<Journey>, CoreErr> {
+        const SEARCH: u32 = 60;
+        const MIN_CHANGE: i64 = 60;
+        let Some(first) = self.first_leg(from, via, after, SEARCH)? else {
+            return Ok(None);
+        };
+        let Some(second) =
+            self.first_leg(via, to, first.alight().arrives_at + MIN_CHANGE, SEARCH)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(Journey {
+            legs: vec![first, second],
+        }))
+    }
+
+    fn first_leg(
+        &self,
+        from: StopId,
+        to: StopId,
+        after: i64,
+        search: u32,
+    ) -> Result<Option<Leg>, CoreErr> {
+        for departure in self.departures_at(from, after, search)? {
+            if let Some(leg) = self.leg(departure.trip_id, departure.service_day_start, from, to)? {
+                return Ok(Some(leg));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn watch_departure(
+        &self,
+        station: StopId,
+        departure: &Departure,
+    ) -> Result<Option<Watch>, CoreErr> {
+        Ok(self
+            .store()
+            .leg(
+                departure.trip_id,
+                departure.service_day_start,
+                station,
+                None,
+            )?
+            .map(Watch::Departure))
+    }
+
+    pub fn watch(&self, watch: &Watch) -> Result<(), CoreErr> {
+        let (kind, legs) = watch.encode();
+        self.store().save_watch(Some((kind, &legs)))
+    }
+
+    pub fn unwatch(&self) -> Result<(), CoreErr> {
+        self.store().save_watch(None)
+    }
+
+    pub fn active_watch(&self) -> Result<Option<Watch>, CoreErr> {
+        self.active_watch_at(unix_now())
+    }
+
+    fn active_watch_at(&self, now: i64) -> Result<Option<Watch>, CoreErr> {
+        let store = self.store();
+        let Some((kind, encoded)) = store.saved_watch()? else {
+            return Ok(None);
+        };
+        let mut legs = Vec::new();
+        for leg in encoded.split(';') {
+            let mut parts = leg.split(':');
+            let (Some(trip), Some(start), Some(board), Some(alight)) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            else {
+                return Ok(None);
+            };
+            let (Ok(trip), Ok(start), Ok(board)) = (trip.parse(), start.parse(), board.parse())
+            else {
+                return Ok(None);
+            };
+            let alight = match alight {
+                "" => None,
+                alight => match alight.parse() {
+                    Ok(alight) => Some(alight),
+                    Err(_) => return Ok(None),
+                },
+            };
+            match store.leg(trip, start, board, alight)? {
+                Some(leg) => legs.push(leg),
+                None => return Ok(None),
+            }
+        }
+        let watch = match (kind.as_str(), legs.len()) {
+            ("departure", 1) => Watch::Departure(legs.remove(0)),
+            ("journey", 1..) => Watch::Journey(Journey { legs }),
+            _ => return Ok(None),
+        };
+        if watch.ends_at() < now {
+            store.save_watch(None)?;
+            return Ok(None);
+        }
+        Ok(Some(watch))
     }
 
     pub fn departures(&self, station: StopId, limit: u32) -> Result<Vec<Departure>, CoreErr> {
@@ -750,6 +873,193 @@ mod tests {
 
     const HOUR: i64 = 60 * 60;
     const SEP_17_2026_UTC: i64 = 1_789_603_200;
+
+    fn station(iritsi: &Iritsi, name: &str) -> StopId {
+        iritsi
+            .stations()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.name == name)
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn watches_a_departure() {
+        let (iritsi, dir) = ingested();
+        let abando = station(&iritsi, "Abando");
+        let departure = iritsi
+            .departures_at(abando, SEP_17_2026_UTC + 6 * HOUR, 1)
+            .unwrap()
+            .remove(0);
+        let watch = iritsi.watch_departure(abando, &departure).unwrap().unwrap();
+        let Watch::Departure(leg) = &watch else {
+            panic!("not a departure")
+        };
+        assert_eq!(leg.stops.len(), 1);
+        assert_eq!(leg.board().name, "Abando");
+        assert_eq!(leg.board().departs_at, departure.departs_at);
+        assert!(leg.line.is_some());
+
+        let alerts = watch.alerts(DEFAULT_LEAD);
+        let phases: Vec<_> = alerts.iter().map(|a| a.phase).collect();
+        assert_eq!(phases, vec![Phase::Upcoming, Phase::Board, Phase::Done]);
+        assert_eq!(alerts[0].at, departure.departs_at - 15 * 60);
+        assert!(alerts[0].title.contains(&departure.headsign));
+        assert_eq!(alerts[1].countdown_to, Some(departure.departs_at));
+        assert_eq!(watch.current(alerts[0].at - 1, DEFAULT_LEAD), None);
+        assert_eq!(
+            watch
+                .current(departure.departs_at - 60, DEFAULT_LEAD)
+                .unwrap()
+                .phase,
+            Phase::Board
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn remembers_the_active_watch() {
+        let (iritsi, dir) = ingested();
+        let abando = station(&iritsi, "Abando");
+        let now = SEP_17_2026_UTC + 6 * HOUR;
+        let departure = iritsi.departures_at(abando, now, 1).unwrap().remove(0);
+        let watch = iritsi.watch_departure(abando, &departure).unwrap().unwrap();
+        assert_eq!(iritsi.active_watch_at(now).unwrap(), None);
+
+        iritsi.watch(&watch).unwrap();
+        iritsi.ingest(GTFS).unwrap();
+        assert_eq!(iritsi.active_watch_at(now).unwrap(), Some(watch.clone()));
+
+        assert_eq!(iritsi.active_watch_at(watch.ends_at() + 1).unwrap(), None);
+        assert_eq!(iritsi.active_watch_at(now).unwrap(), None);
+
+        iritsi.watch(&watch).unwrap();
+        iritsi.unwatch().unwrap();
+        assert_eq!(iritsi.active_watch_at(now).unwrap(), None);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn builds_a_test_journey_via_a_change() {
+        let (iritsi, dir) = ingested();
+        let areeta = station(&iritsi, "Areeta");
+        let san_ignazio = station(&iritsi, "San Ignazio");
+        let ansio = station(&iritsi, "Ansio");
+        let after = SEP_17_2026_UTC + 6 * HOUR;
+
+        let journey = iritsi
+            .journey_via(areeta, san_ignazio, ansio, after)
+            .unwrap()
+            .unwrap();
+        let [first, second] = journey.legs.as_slice() else {
+            panic!("expected two legs");
+        };
+        assert_eq!(first.board().name, "Areeta");
+        assert_eq!(first.alight().name, "San Ignazio");
+        assert_eq!(first.line, Some(Line::L1));
+        assert_eq!(second.board().name, "San Ignazio");
+        assert_eq!(second.alight().name, "Ansio");
+        assert_eq!(second.line, Some(Line::L2));
+        assert!(first.board().departs_at >= after);
+        assert!(second.board().departs_at >= first.alight().arrives_at + 60);
+
+        let santurtzi = station(&iritsi, "Santurtzi");
+        assert_eq!(
+            iritsi.journey_via(areeta, santurtzi, ansio, after).unwrap(),
+            None
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn watches_a_journey_with_a_transfer() {
+        let (iritsi, dir) = ingested();
+        let santurtzi = station(&iritsi, "Santurtzi");
+        let san_ignazio = station(&iritsi, "San Ignazio");
+        let plentzia = station(&iritsi, "Plentzia");
+
+        let first = iritsi
+            .departures_at(santurtzi, SEP_17_2026_UTC + 6 * HOUR, 10)
+            .unwrap()
+            .into_iter()
+            .find(|d| d.headsign != "Santurtzi")
+            .unwrap();
+        let ride = iritsi
+            .leg(
+                first.trip_id,
+                first.service_day_start,
+                santurtzi,
+                san_ignazio,
+            )
+            .unwrap()
+            .unwrap();
+        let second = iritsi
+            .departures_at(san_ignazio, ride.alight().arrives_at + 60, 30)
+            .unwrap()
+            .into_iter()
+            .find(|d| d.headsign == "Plentzia")
+            .unwrap();
+        let onward = iritsi
+            .leg(
+                second.trip_id,
+                second.service_day_start,
+                san_ignazio,
+                plentzia,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(ride.line, Some(Line::L2));
+        assert_eq!(onward.line, Some(Line::L1));
+
+        let journey = Journey {
+            legs: vec![ride.clone(), onward.clone()],
+        };
+        let watch = Watch::Journey(journey.clone());
+        let alerts = watch.alerts(DEFAULT_LEAD);
+        let count = |phase| alerts.iter().filter(|a| a.phase == phase).count();
+        assert_eq!(count(Phase::Upcoming), 1);
+        let waits = onward.board().departs_at - ride.alight().arrives_at > 2 * 60;
+        assert_eq!(count(Phase::Board), 1 + waits as usize);
+        assert!(alerts.iter().all(|a| !a.text.contains("platform")));
+        assert!(alerts.iter().all(|a| !a.text.contains(" 1 stops")));
+        assert_eq!(count(Phase::Transfer), 1);
+        assert_eq!(count(Phase::GetOff), 2);
+        assert_eq!(count(Phase::Arrived), 1);
+        assert_eq!(
+            count(Phase::Ride),
+            ride.stops.len() + onward.stops.len() - 4
+        );
+        assert!(alerts.windows(2).all(|w| w[0].at <= w[1].at));
+        assert_eq!(alerts.last().unwrap().phase, Phase::Done);
+
+        let transfer = alerts.iter().find(|a| a.phase == Phase::Transfer).unwrap();
+        assert_eq!(transfer.title, "Change to L1 to Plentzia");
+        assert_eq!(transfer.countdown_to, Some(onward.board().departs_at));
+
+        let progress = alerts.iter().find_map(|a| a.progress.clone()).unwrap();
+        assert_eq!(
+            progress.max as i64,
+            journey.arrives_at() - journey.departs_at()
+        );
+        assert_eq!(
+            progress.segments.iter().map(|s| s.length).sum::<u32>(),
+            progress.max
+        );
+        assert_eq!(progress.segments.first().unwrap().line, Some(Line::L2));
+        assert_eq!(progress.segments.last().unwrap().line, Some(Line::L1));
+
+        let riding = watch
+            .current(ride.stops[2].departs_at + 1, DEFAULT_LEAD)
+            .unwrap();
+        assert_eq!(riding.phase, Phase::Ride);
+        assert_eq!(riding.title, format!("Next: {}", ride.stops[3].name));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn lists_upcoming_departures() {
