@@ -31,6 +31,40 @@ pub struct Station {
     pub zone_id: String,
     pub lat: f64,
     pub lon: f64,
+    pub lines: Vec<Line>,
+    pub favorite: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Line {
+    L1 = 1,
+    L2 = 2,
+}
+
+impl Line {
+    pub const ALL: [Line; 2] = [Line::L1, Line::L2];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Line::L1 => "L1",
+            Line::L2 => "L2",
+        }
+    }
+
+    pub fn termini(self) -> (&'static str, &'static str) {
+        match self {
+            Line::L1 => ("Etxebarri", "Plentzia"),
+            Line::L2 => ("Basauri", "Kabiezes"),
+        }
+    }
+
+    fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "1" => Some(Line::L1),
+            "2" => Some(Line::L2),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +95,7 @@ pub enum Refresh {
 
 pub struct Iritsi {
     path: PathBuf,
+    user_path: PathBuf,
     store: Mutex<store::Store>,
     refreshing: Mutex<()>,
 }
@@ -68,9 +103,11 @@ pub struct Iritsi {
 impl Iritsi {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, CoreErr> {
         let path = path.into();
-        let store = store::Store::open(&path)?;
+        let user_path = path.with_extension("user.db");
+        let store = store::Store::open(&path, &user_path)?;
         let iritsi = Self {
             path,
+            user_path,
             store: Mutex::new(store),
             refreshing: Mutex::new(()),
         };
@@ -138,7 +175,7 @@ impl Iritsi {
         fs::atomic_replace(&self.path, |tmp: &Path| {
             store::Store::ingest(tmp, gtfs, meta)
         })?;
-        *self.store() = store::Store::open(&self.path)?;
+        *self.store() = store::Store::open(&self.path, &self.user_path)?;
         Ok(())
     }
 
@@ -148,6 +185,14 @@ impl Iritsi {
 
     pub fn search_stations(&self, query: &str) -> Result<Vec<Station>, CoreErr> {
         self.store().search_stations(query)
+    }
+
+    pub fn favorites(&self) -> Result<Vec<Station>, CoreErr> {
+        self.store().favorites()
+    }
+
+    pub fn set_favorite(&self, id: StopId, favorite: bool) -> Result<(), CoreErr> {
+        self.store().set_favorite(id, favorite, unix_now())
     }
 
     pub fn station(&self, id: StopId) -> Result<Option<Station>, CoreErr> {
@@ -278,6 +323,63 @@ mod tests {
 
         assert_eq!(iritsi.search_stations("").unwrap().len(), 42);
         assert!(iritsi.search_stations("%").unwrap().is_empty());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn orders_stations_along_the_lines() {
+        let (iritsi, dir) = ingested();
+        let stations = iritsi.stations().unwrap();
+        let names: Vec<_> = stations.iter().map(|s| s.name.as_str()).collect();
+
+        assert_eq!(stations.len(), 42);
+        assert_eq!(names[0], "Etxebarri");
+        assert_eq!(names[28], "Plentzia");
+        assert_eq!(names[29], "Basauri");
+        assert_eq!(names[41], "Kabiezes");
+
+        let lines = |name| {
+            stations
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap()
+                .lines
+                .clone()
+        };
+        assert_eq!(lines("Abando"), vec![Line::L1, Line::L2]);
+        assert_eq!(lines("Plentzia"), vec![Line::L1]);
+        assert_eq!(lines("Santurtzi"), vec![Line::L2]);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn favorites_survive_feed_updates() {
+        let (iritsi, dir) = ingested();
+        let abando = iritsi.search_stations("Abando").unwrap()[0].id;
+        let ariz = iritsi.search_stations("Ariz").unwrap()[0].id;
+
+        iritsi.set_favorite(ariz, true).unwrap();
+        iritsi.set_favorite(abando, true).unwrap();
+        iritsi.set_favorite(abando, true).unwrap();
+        assert!(iritsi.station(abando).unwrap().unwrap().favorite);
+
+        iritsi.apply_feed(b"not a feed", 0).unwrap_err();
+        iritsi.ingest(GTFS).unwrap();
+
+        let favorites: Vec<_> = iritsi
+            .favorites()
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(favorites.len(), 2);
+        assert!(favorites.contains(&abando) && favorites.contains(&ariz));
+
+        iritsi.set_favorite(ariz, false).unwrap();
+        assert_eq!(iritsi.favorites().unwrap().len(), 1);
+        assert!(!iritsi.station(ariz).unwrap().unwrap().favorite);
 
         std::fs::remove_dir_all(dir).unwrap();
     }

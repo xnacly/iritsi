@@ -3,7 +3,7 @@ use std::path::Path;
 use iritsi_gtfs::{GtfsSchedule, LocationType, ServiceException, StopId};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::{Departure, Station, date::ServiceDay, err::CoreErr};
+use crate::{Departure, Line, Station, date::ServiceDay, err::CoreErr};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS stops (
@@ -63,6 +63,12 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value INTEGER NOT NULL
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS station_lines (
+    station_id INTEGER NOT NULL,
+    line INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (station_id, line)
+) WITHOUT ROWID;
 ";
 
 pub const META_FEED_HASH: &str = "feed_hash";
@@ -76,19 +82,33 @@ CREATE INDEX IF NOT EXISTS stops_by_parent ON stops (parent_station);
 CREATE INDEX IF NOT EXISTS calendar_dates_by_date ON calendar_dates (date);
 ";
 
+const USER_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS user.favorites (
+    station_id TEXT PRIMARY KEY,
+    added_at INTEGER NOT NULL
+) WITHOUT ROWID;
+";
+
 const STATION_SELECT: &str = "
-SELECT s.id, s.name, s.zone_id, s.lat, s.lon
+SELECT s.id, s.name, s.zone_id, s.lat, s.lon,
+    (SELECT group_concat(line) FROM (
+        SELECT line FROM station_lines l WHERE l.station_id = s.id ORDER BY line
+    )),
+    f.station_id IS NOT NULL
 FROM stops s
+LEFT JOIN user.favorites f ON f.station_id = s.gtfs_id
+LEFT JOIN station_lines o ON o.station_id = s.id
+    AND o.line = (SELECT MIN(line) FROM station_lines m WHERE m.station_id = s.id)
 WHERE s.location_type = 1";
 
-const STATION_ORDER: &str = "ORDER BY s.name";
+const STATION_ORDER: &str = "ORDER BY o.line IS NULL, o.line, o.position, s.name";
 
 pub struct Store {
     conn: Connection,
 }
 
 impl Store {
-    pub fn open(path: &Path) -> Result<Self, CoreErr> {
+    pub fn open(path: &Path, user: &Path) -> Result<Self, CoreErr> {
         let mut conn = Connection::open(path)?;
         if !is_current(&conn)? {
             drop(conn);
@@ -98,6 +118,8 @@ impl Store {
         }
         conn.execute_batch(SCHEMA)?;
         conn.execute_batch(INDEXES)?;
+        conn.execute("ATTACH DATABASE ?1 AS user", [user.to_string_lossy()])?;
+        conn.execute_batch(USER_SCHEMA)?;
         Ok(Self { conn })
     }
 
@@ -228,6 +250,9 @@ impl Store {
                 ])?;
             }
         }
+        for line in Line::ALL {
+            insert_line(&tx, line)?;
+        }
         tx.execute_batch(INDEXES)?;
         tx.commit()?;
         conn.execute_batch("PRAGMA analysis_limit = 400; ANALYZE;")?;
@@ -253,6 +278,29 @@ impl Store {
             .prepare_cached(&format!("{STATION_SELECT} AND s.id = ?1"))?
             .query_row([key(id)], Station::from_row)
             .optional()?)
+    }
+
+    pub fn favorites(&self) -> Result<Vec<Station>, CoreErr> {
+        self.conn
+            .prepare_cached(&format!(
+                "{STATION_SELECT} AND f.station_id IS NOT NULL ORDER BY f.added_at, s.name"
+            ))?
+            .query_map([], Station::from_row)?
+            .map(|row| Ok(row?))
+            .collect()
+    }
+
+    pub fn set_favorite(&self, id: StopId, favorite: bool, now: i64) -> Result<(), CoreErr> {
+        if favorite {
+            self.conn
+                .prepare_cached("INSERT OR IGNORE INTO user.favorites VALUES (?1, ?2)")?
+                .execute(params![id.to_string(), now])?;
+        } else {
+            self.conn
+                .prepare_cached("DELETE FROM user.favorites WHERE station_id = ?1")?
+                .execute([id.to_string()])?;
+        }
+        Ok(())
     }
 
     pub fn departures(
@@ -302,6 +350,40 @@ impl Store {
     }
 }
 
+fn insert_line(conn: &Connection, line: Line) -> Result<(), CoreErr> {
+    let (from, to) = line.termini();
+    let trip: Option<u32> = conn
+        .query_row(
+            "WITH ends AS (
+                SELECT trip_id, MIN(stop_seq) AS first, MAX(stop_seq) AS last
+                FROM stop_times GROUP BY trip_id
+            )
+            SELECT e.trip_id FROM ends e
+            JOIN stop_times a ON a.trip_id = e.trip_id AND a.stop_seq = e.first
+            JOIN stops pa ON pa.id = a.stop_id
+            JOIN stops sa ON sa.id = pa.parent_station
+            JOIN stop_times b ON b.trip_id = e.trip_id AND b.stop_seq = e.last
+            JOIN stops pb ON pb.id = b.stop_id
+            JOIN stops sb ON sb.id = pb.parent_station
+            WHERE sa.name = ?1 AND sb.name = ?2
+            LIMIT 1",
+            [from, to],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(trip) = trip else {
+        return Ok(());
+    };
+    conn.execute(
+        "INSERT OR IGNORE INTO station_lines
+        SELECT p.parent_station, ?2, ROW_NUMBER() OVER (ORDER BY st.stop_seq)
+        FROM stop_times st JOIN stops p ON p.id = st.stop_id
+        WHERE st.trip_id = ?1",
+        params![trip, line as u8],
+    )?;
+    Ok(())
+}
+
 fn set_meta(conn: &Connection, key: &str, value: i64) -> Result<(), CoreErr> {
     conn.prepare_cached("INSERT OR REPLACE INTO meta VALUES (?1, ?2)")?
         .execute(params![key, value])?;
@@ -336,6 +418,13 @@ impl Station {
             zone_id: row.get(2)?,
             lat: row.get(3)?,
             lon: row.get(4)?,
+            lines: row
+                .get::<_, Option<String>>(5)?
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(Line::from_id)
+                .collect(),
+            favorite: row.get(6)?,
         })
     }
 }
@@ -366,7 +455,7 @@ mod tests {
         .unwrap();
         drop(old);
 
-        let store = Store::open(&path).unwrap();
+        let store = Store::open(&path, &dir.join("user.db")).unwrap();
         let version: i64 = store
             .conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
