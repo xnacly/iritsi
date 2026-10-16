@@ -1,4 +1,7 @@
-use crate::{components::Icon, RefreshStatus, Route, Tab, REFRESH, TAB_ROUTES};
+use crate::{
+    components::{Icon, WatchCard},
+    RefreshStatus, Route, Tab, REFRESH, TAB_ROUTES,
+};
 use dioxus::prelude::*;
 use iritsi_core::Refresh;
 
@@ -49,6 +52,7 @@ pub fn Navbar() -> Element {
                     }
                 }
             },
+            WatchCard {}
             if let Some(parent) = parent.clone() {
                 Link { class: "back", to: parent,
                     Icon { name: "back" }

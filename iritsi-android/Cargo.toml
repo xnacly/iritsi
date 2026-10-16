@@ -13,6 +13,11 @@ dioxus = { version = "0.7.1", features = ["router"] }
 iritsi-core = { path = "../iritsi-core", features = ["bundled-feed"] }
 tokio = { version = "1", features = ["rt", "sync", "time"] }
 
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"
+serde_json = "1"
+
 [features]
 default = ["mobile"]
 web = ["dioxus/web"]

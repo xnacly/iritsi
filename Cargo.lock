@@ -2674,6 +2674,9 @@ version = "0.1.0"
 dependencies = [
  "dioxus",
  "iritsi-core",
+ "jni 0.21.1",
+ "ndk-context",
+ "serde_json",
  "tokio",
 ]
 

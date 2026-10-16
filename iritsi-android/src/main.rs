@@ -1,13 +1,14 @@
 use std::sync::OnceLock;
 
 use dioxus::prelude::*;
-use iritsi_core::{Iritsi, Progress, Refresh, Settings, Station, StopId};
+use iritsi_core::{Iritsi, Progress, Refresh, Settings, Station, StopId, Watch};
 
 use components::Splash;
 use views::{About, Journey, Licenses, Navbar, Pick, Plan, StationDetail, Stations};
 
 mod components;
 mod licenses;
+mod notify;
 mod views;
 
 #[derive(Debug, Clone, Routable, PartialEq)]
@@ -114,6 +115,8 @@ pub(crate) static TAB_ROUTES: GlobalSignal<[Route; 3]> =
 pub static STATION_QUERY: GlobalSignal<String> = Signal::global(String::new);
 pub static SETTINGS: GlobalSignal<Settings> =
     Signal::global(|| core().settings().unwrap_or_default());
+pub static WATCH: GlobalSignal<Option<Watch>> =
+    Signal::global(|| core().active_watch().ok().flatten());
 pub static DATA_VERSION: GlobalSignal<u64> = Signal::global(|| 0);
 pub static REFRESH: GlobalSignal<RefreshStatus> = Signal::global(|| RefreshStatus::Idle);
 
@@ -192,6 +195,16 @@ pub enum RefreshKind {
     Redownload,
 }
 
+pub fn set_watch(watch: Option<Watch>) {
+    let saved = match &watch {
+        Some(watch) => core().watch(watch),
+        None => core().unwatch(),
+    };
+    if saved.is_ok() {
+        *WATCH.write() = watch;
+    }
+}
+
 pub fn start_refresh(kind: RefreshKind) {
     let manual = kind != RefreshKind::Scheduled;
     if matches!(
@@ -228,6 +241,34 @@ pub fn start_refresh(kind: RefreshKind) {
         };
         *REFRESH.write() = status;
     });
+}
+
+#[component]
+fn NotificationSync() -> Element {
+    let mut scheduled = use_signal(|| None::<(Watch, String)>);
+    use_effect(move || {
+        let watch = WATCH.read().clone();
+        let accent = SETTINGS.read().accent.clone();
+        let next = watch.map(|watch| (watch, accent));
+        if *scheduled.peek() == next {
+            return;
+        }
+        match &next {
+            Some((watch, accent)) => {
+                let rgb = |hex: &str| u32::from_str_radix(&hex[1..], 16).unwrap_or(0xff6505);
+                notify::schedule(
+                    &watch.alerts(iritsi_core::DEFAULT_LEAD),
+                    &notify::Colors {
+                        accent: rgb(accent),
+                        accent_dark: rgb(&mix(accent, 0.0, 1.0 - DARK_SHADE)),
+                    },
+                );
+            }
+            None => notify::cancel(),
+        }
+        scheduled.set(next);
+    });
+    rsx! {}
 }
 
 #[component]
@@ -280,6 +321,7 @@ fn App() -> Element {
             _ => rsx! {
                 Router::<Route> {}
                 SplashLayer {}
+                NotificationSync {}
             },
         }
     }
