@@ -6,7 +6,8 @@ edition = "2021"
 
 [dependencies]
 dioxus = { version = "0.7.1", features = ["router"] }
-iritsi-core = { path = "../iritsi-core" }
+iritsi-core = { path = "../iritsi-core", features = ["bundled-feed"] }
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 
 [features]
 default = ["mobile"]
