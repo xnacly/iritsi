@@ -11,7 +11,7 @@ use crate::{
     DATA_VERSION, REFRESH, SETTINGS,
 };
 
-const APP_ICON: Asset = asset!("/assets/icons/128x128.png");
+const APP_ICON: Asset = asset!("/assets/icons/rings.png");
 
 #[component]
 pub fn About() -> Element {

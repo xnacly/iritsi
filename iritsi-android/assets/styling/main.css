@@ -421,7 +421,12 @@ ul.departures li {
 .app-icon {
     width: 64px;
     height: 64px;
+    padding: 6px;
+    box-sizing: border-box;
     image-rendering: pixelated;
+    background: var(--surface);
+    border: var(--border);
+    box-shadow: var(--shadow);
 }
 
 ul.licenses {

@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use iritsi_core::Progress;
 
-const APP_ICON: Asset = asset!("/assets/icons/128x128.png");
+const APP_ICON: Asset = asset!("/assets/icons/rings.png");
 
 #[component]
 pub fn Splash(progress: Progress) -> Element {
